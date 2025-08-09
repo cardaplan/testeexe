@@ -2996,66 +2996,83 @@
                 applyConfiguration();
                 updateProgress(20);
 
-                // Load categories data
+                // Load remaining CSVs concurrently while preserving logic
                 infoLog('Loading categories data...');
-                categoriesData = await loadCSVData(CATEGORIES_CSV_URL);
-                updateProgress(40);
-
-                // Load menu items data
                 infoLog('Loading menu items data...');
-                const menuItems = await loadCSVData(MENU_CSV_URL);
-                updateProgress(65);
-
-                // Load hours data
                 infoLog('Loading hours data...');
-                hoursData = await loadCSVData(HOURS_CSV_URL);
-                debugLog('Hours data loaded:', hoursData.length, 'entries');
-                
+                debugLog('🏠️ Loading neighborhoods data...');
+                debugLog('🎟️ Loading coupons data...');
+
+                // Start parallel requests with progress bumps when each completes
+                const categoriesPromise = loadCSVData(CATEGORIES_CSV_URL)
+                    .then(result => { updateProgress(40); return result; });
+                const menuPromise = loadCSVData(MENU_CSV_URL)
+                    .then(result => { updateProgress(65); return result; });
+                const hoursPromise = loadCSVData(HOURS_CSV_URL)
+                    .then(result => { debugLog('Hours data loaded:', result.length, 'entries'); updateProgress(80); return result; });
+                const neighborhoodsPromise = loadCSVData(NEIGHBORHOODS_CSV_URL);
+                const couponsPromise = loadCSVData(COUPONS_CSV_URL);
+
+                const [categoriesRes, menuRes, hoursRes, neighborhoodsRes, couponsRes] = await Promise.allSettled([
+                    categoriesPromise,
+                    menuPromise,
+                    hoursPromise,
+                    neighborhoodsPromise,
+                    couponsPromise
+                ]);
+
+                // Required datasets: categories, menu, hours (fail fast like before)
+                if (categoriesRes.status !== 'fulfilled') { throw categoriesRes.reason; }
+                categoriesData = categoriesRes.value;
+
+                if (menuRes.status !== 'fulfilled') { throw menuRes.reason; }
+                const menuItems = menuRes.value;
+
+                if (hoursRes.status !== 'fulfilled') { throw hoursRes.reason; }
+                hoursData = hoursRes.value;
+
+                // Initialize timezone after hours data is available (same logic as before)
                 if (hoursData.length > 0) {
-                    // Inicializar timezone global
                     debugLog('🚀 Initializing global timezone...');
                     initializeGlobalTimezone();
-                    
-                    // Verificar se timezone foi configurado corretamente
                     if (globalTimezone) {
                         debugLog('✅ Timezone system initialized:', globalTimezone);
                     } else {
                         warnLog('❌ Timezone system not configured properly');
                     }
                 }
-                updateProgress(80);
 
-                // Load neighborhoods data for delivery fees
-                debugLog('🏠️ Loading neighborhoods data...');
+                // Neighborhoods: keep original tolerant behavior and mapping
                 try {
-                    neighborhoodsData = await loadCSVData(NEIGHBORHOODS_CSV_URL);
-                    // Process neighborhoods data - mapear para formato consistente
-                    neighborhoodsData = neighborhoodsData.map(row => ({
-                        // Tentar várias possibilidades de nomes de colunas
-                        bairro: (row.bairro || row.nome_bairro || row.Bairro || row.BAIRRO || '').trim().toLowerCase(),
-                        taxa: parseFloat((row.taxa || row.valor_taxa || row.Taxa || row.TAXA || '0').toString().replace(',', '.')) || 0
-                    })).filter(item => item.bairro); // Remove empty entries
-                    
-                    // Expor dados globalmente para acesso em outras funções
-                    window.neighborhoodsData = neighborhoodsData;
-                    
-                    // Preparar lista para autocomplete
-                    prepareNeighborhoodsAutocomplete();
-                    
-                    infoLog(`✅ Neighborhoods loaded:`, neighborhoodsData.length, 'items');
+                    if (neighborhoodsRes.status === 'fulfilled') {
+                        neighborhoodsData = neighborhoodsRes.value;
+                        neighborhoodsData = neighborhoodsData.map(row => ({
+                            bairro: (row.bairro || row.nome_bairro || row.Bairro || row.BAIRRO || '').trim().toLowerCase(),
+                            taxa: parseFloat((row.taxa || row.valor_taxa || row.Taxa || row.TAXA || '0').toString().replace(',', '.')) || 0
+                        })).filter(item => item.bairro);
+
+                        window.neighborhoodsData = neighborhoodsData;
+                        prepareNeighborhoodsAutocomplete();
+                        infoLog(`✅ Neighborhoods loaded:`, neighborhoodsData.length, 'items');
+                    } else {
+                        throw neighborhoodsRes.reason;
+                    }
                 } catch (error) {
-                    errorLog('❌ Error loading neighborhoods:', error.message);
-                    neighborhoodsData = []; // Fallback to empty array
+                    errorLog('❌ Error loading neighborhoods:', (error && error.message) || error);
+                    neighborhoodsData = [];
                 }
-                
-                // Load coupons data
-                debugLog('🎟️ Loading coupons data...');
+
+                // Coupons: keep original tolerant behavior
                 try {
-                    couponsData = await loadCSVData(COUPONS_CSV_URL);
-                    infoLog(`✅ Coupons loaded:`, couponsData.length, 'items');
+                    if (couponsRes.status === 'fulfilled') {
+                        couponsData = couponsRes.value;
+                        infoLog(`✅ Coupons loaded:`, couponsData.length, 'items');
+                    } else {
+                        throw couponsRes.reason;
+                    }
                 } catch (error) {
-                    errorLog('❌ Error loading coupons:', error.message);
-                    couponsData = []; // Fallback to empty array
+                    errorLog('❌ Error loading coupons:', (error && error.message) || error);
+                    couponsData = [];
                 }
                 updateProgress(85);
 
